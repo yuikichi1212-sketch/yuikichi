@@ -1,12 +1,13 @@
-<!doctype html>
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>リアルタイム位置共有（Room）</title>
+  
+  <!-- Leaflet CSS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
-    html,body,#map { height:100%; margin:0; padding:0; }
+    html, body, #map { height: 100%; margin:0; padding:0; }
     body { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Hiragino Kaku Gothic ProN','Noto Sans JP', sans-serif; }
     .ui { position: absolute; z-index:1000; left:12px; top:12px; background:rgba(255,255,255,0.95); padding:12px; border-radius:8px; box-shadow:0 4px 20px rgba(0,0,0,0.12); width:320px; }
     .ui h2 { margin:0 0 8px 0; font-size:16px; }
@@ -33,8 +34,15 @@
     <div class="small" id="status">未参加</div>
   </div>
 
-  <script type="module">
-    // Firebase config（あなたのプロジェクト情報を埋め込み済み）
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- Firebase SDK（モジュール版不要で簡易読み込み） -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
+
+  <script>
+    // Firebase config
     const firebaseConfig = {
       apiKey: "AIzaSyC5gLzMBuoHCO9_CgqnUTOLAC1BIzZb7Sw",
       authDomain: "location-share-bc69b.firebaseapp.com",
@@ -45,20 +53,16 @@
       appId: "1:589367892503:web:a37b7cc6b4edd96b65da52",
       measurementId: "G-QVZN8MS60K"
     };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
 
-    // Firebase SDK（モジュール版）
-    import { initializeApp } from 'https://www.gstatic.com/firebasejs/9.22.2/firebase-app.js';
-    import { getDatabase, ref, set, onValue, remove } from 'https://www.gstatic.com/firebasejs/9.22.2/firebase-database.js';
-
-    const app = initializeApp(firebaseConfig);
-    const db = getDatabase(app);
-
-    // Leaflet 初期化
-    import 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+    // Leaflet map
     const map = L.map('map').setView([35.68,139.76], 13);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19, attribution:'© OpenStreetMap contributors' }).addTo(map);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+      maxZoom:19, attribution:'© OpenStreetMap contributors'
+    }).addTo(map);
 
-    // UI 要素
+    // UI elements
     const joinBtn = document.getElementById('joinBtn');
     const leaveBtn = document.getElementById('leaveBtn');
     const roomInput = document.getElementById('roomInput');
@@ -68,102 +72,82 @@
     let clientId = 'c_' + Math.random().toString(36).slice(2,9);
     let roomName = null;
     let sendInterval = null;
-    let markers = {}; // clientId -> marker
+    let markers = {};
     let firstPositionSet = false;
 
-    function setStatus(t) { statusEl.textContent = t; }
+    function setStatus(t){ statusEl.textContent = t; }
 
-    async function startSharing() {
-      if (!roomName) return alert('先にルーム名を入れてください');
-      if (!navigator.geolocation) return alert('このブラウザは Geolocation に未対応です');
+    function startSharing(){
+      if(!roomName) return alert('先にルーム名を入れてください');
+      if(!navigator.geolocation) return alert('このブラウザは Geolocation に未対応です');
 
-      // 初回位置取得して地図を自動センター
-      navigator.geolocation.getCurrentPosition((pos)=>{
+      // 初回位置取得して自動センター
+      navigator.geolocation.getCurrentPosition(pos=>{
         const lat = pos.coords.latitude, lon = pos.coords.longitude;
-        if(!firstPositionSet){ map.setView([lat,lon], 15); firstPositionSet=true; }
-      }, (err)=>console.warn('初回位置取得失敗', err), { enableHighAccuracy:true, maximumAge:5000, timeout:10000 });
+        if(!firstPositionSet){ map.setView([lat,lon],15); firstPositionSet=true; }
+      }, err=>console.warn('初回位置取得失敗',err), { enableHighAccuracy:true, maximumAge:5000, timeout:10000 });
 
-      // 5秒ごとに位置送信
       sendMyPos();
-      sendInterval = setInterval(sendMyPos, 5000);
+      sendInterval = setInterval(sendMyPos,5000);
 
-      // ルームの位置を監視
-      const roomRef = ref(db, `rooms/${roomName}`);
-      onValue(roomRef, (snapshot) => {
+      const roomRef = db.ref(`rooms/${roomName}`);
+      roomRef.on('value', snapshot=>{
         const data = snapshot.val() || {};
-        // 更新されたメンバーを描画
         const now = Date.now();
-        // マーカー管理：消えた人を削除
+        // 消えた人のマーカー削除
         const existingIds = new Set(Object.keys(data));
-        for (const id of Object.keys(markers)) {
-          if (!existingIds.has(id)) { map.removeLayer(markers[id]); delete markers[id]; }
+        for(const id of Object.keys(markers)){
+          if(!existingIds.has(id)){ map.removeLayer(markers[id]); delete markers[id]; }
         }
-        for (const [id, obj] of Object.entries(data)) {
-          if (!obj || !obj.lat || !obj.lon) continue;
-          // ステale判定: 30秒以上更新がない場合は表示しない
-          if (obj.ts && (now - obj.ts) > 30000) continue;
-
-          if (!markers[id]) {
-            markers[id] = L.marker([obj.lat, obj.lon]).addTo(map).bindPopup(obj.name || id);
-          } else {
-            markers[id].setLatLng([obj.lat, obj.lon]);
-            if (markers[id].getPopup()) markers[id].getPopup().setContent(obj.name || id);
+        for(const [id,obj] of Object.entries(data)){
+          if(!obj || !obj.lat || !obj.lon) continue;
+          if(obj.ts && (now-obj.ts)>30000) continue;
+          if(!markers[id]){
+            markers[id] = L.marker([obj.lat,obj.lon]).addTo(map).bindPopup(obj.name||id);
+          }else{
+            markers[id].setLatLng([obj.lat,obj.lon]);
+            if(markers[id].getPopup()) markers[id].getPopup().setContent(obj.name||id);
           }
         }
       });
 
       setStatus(`参加中 — ルーム: ${roomName}（5秒更新）`);
-      joinBtn.disabled = true; leaveBtn.disabled = false; roomInput.disabled = true; displayNameInput.disabled = true;
+      joinBtn.disabled=true; leaveBtn.disabled=false; roomInput.disabled=true; displayNameInput.disabled=true;
     }
 
-    function stopSharing() {
-      if (sendInterval) { clearInterval(sendInterval); sendInterval = null; }
-      // 自分のデータを削除
-      if (roomName) {
-        const myRef = ref(db, `rooms/${roomName}/${clientId}`);
-        remove(myRef).catch(()=>{});
+    function stopSharing(){
+      if(sendInterval){ clearInterval(sendInterval); sendInterval=null; }
+      if(roomName){
+        db.ref(`rooms/${roomName}/${clientId}`).remove().catch(()=>{});
       }
-      // マーカーを消す
-      for (const id of Object.keys(markers)) { map.removeLayer(markers[id]); }
-      markers = {};
+      for(const id of Object.keys(markers)){ map.removeLayer(markers[id]); }
+      markers={};
       setStatus('未参加');
-      joinBtn.disabled = false; leaveBtn.disabled = true; roomInput.disabled = false; displayNameInput.disabled = false;
-      roomName = null;
+      joinBtn.disabled=false; leaveBtn.disabled=true; roomInput.disabled=false; displayNameInput.disabled=false;
+      roomName=null;
     }
 
     function sendMyPos(){
-      if (!roomName) return;
-      navigator.geolocation.getCurrentPosition((pos)=>{
-        const lat = pos.coords.latitude; const lon = pos.coords.longitude;
+      if(!roomName) return;
+      navigator.geolocation.getCurrentPosition(pos=>{
+        const lat = pos.coords.latitude, lon = pos.coords.longitude;
         const name = (displayNameInput.value || '名無し');
-        const myRef = ref(db, `rooms/${roomName}/${clientId}`);
-        set(myRef, { lat, lon, name, ts: Date.now() }).catch(err=>{
-          console.warn('書き込み失敗', err);
-        });
-      }, (err)=>{
-        console.warn('位置取得エラー', err);
-      }, { enableHighAccuracy:true, maximumAge:3000, timeout:10000 });
+        db.ref(`rooms/${roomName}/${clientId}`).set({ lat, lon, name, ts:Date.now() }).catch(err=>console.warn('書き込み失敗',err));
+      }, err=>console.warn('位置取得エラー',err), { enableHighAccuracy:true, maximumAge:3000, timeout:10000 });
     }
 
-    // イベント
     joinBtn.addEventListener('click', ()=>{
-      const r = (roomInput.value || '').trim();
-      if (!r) return alert('ルーム名を入力してください');
-      roomName = r;
-      startSharing();
+      const r = (roomInput.value||'').trim();
+      if(!r) return alert('ルーム名を入力してください');
+      roomName=r; startSharing();
     });
     leaveBtn.addEventListener('click', ()=>{
-      if (!confirm('退出しますか？')) return;
+      if(!confirm('退出しますか？')) return;
       stopSharing();
     });
-
-    // ページを閉じるときに自分を削除
     window.addEventListener('beforeunload', ()=>{
-      if (roomName) {
-        try { remove(ref(db, `rooms/${roomName}/${clientId}`)); } catch(e){}
-      }
+      if(roomName) db.ref(`rooms/${roomName}/${clientId}`).remove().catch(()=>{});
     });
-
   </script>
 </body>
 </html>
