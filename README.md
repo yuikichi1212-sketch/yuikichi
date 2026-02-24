@@ -170,20 +170,14 @@
     </header>
 
     <section class="hero fade-in">
-        <h2>ゆいきちの世界へようこそ。</h2>
-        <p>驚くほど便利で、ちょっと楽しいアプリたち。</p>
+        <h2>ゆいきちapp</h2>
+        <p>直感的、かつ豊富に</p>
     </section>
 
     <section class="app-section fade-in">
-        <h2 class="app-title">アプリ名 1</h2>
-        <p class="app-headline">すべてを、よりシンプルに。</p>
-        
-        <p class="app-description">
-            ここにアプリの詳しい説明を書きます。どんな機能があるのか、どんな人に使ってほしいのか、熱い思いを自由に書いてください。
-        </p>
-
+        <h2 class="app-title">簡単、かつシンプル</h2>
         <div class="media-container">
-            <p>ここに動画や画像を挿入</p>
+            <p>画面収録 2026-02-24 17.28.36.mov</p>
         </div>
 
         <a href="#" class="btn">ダウンロード</a>
